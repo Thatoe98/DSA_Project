@@ -37,10 +37,14 @@ class Timetable:
 
 def create_timetable():
     days = []
+    valid_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]  # Define valid days
     while True:
-        name = input("Enter the name of the day: ")
+        name = input("Enter the name of the day (or press Enter to finish): ")
         if name == "":
             break
+        if name not in valid_days:
+            print(f"Error: '{name}' is not a valid day. Please enter a valid day (Monday to Friday).")
+            continue
         period = input("Enter the period of the day: ")
         classname = input("Enter the class name for the day: ")
 
@@ -53,7 +57,11 @@ def create_timetable():
 
 
 def add_day(timetable):
+    valid_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]  # Define valid days
     name = input("Enter the name of the day: ")
+    if name not in valid_days:
+        print(f"Error: '{name}' is not a valid day. Please enter a valid day (Monday to Friday).")
+        return
     period = input("Enter the period of the day: ")
     classname = input("Enter the class name for the day: ")
 
