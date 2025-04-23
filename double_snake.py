@@ -50,6 +50,15 @@ except:
     print("Warning: Could not load background music file 'game_music.mp3'")
     music_playing = False
 
+# Load sound effects
+try:
+    food_sound = pygame.mixer.Sound("pop.mp3")
+    food_sound.set_volume(0.7)  # Set food sound volume to 70%
+    has_food_sound = True
+except:
+    print("Warning: Could not load sound effect file 'pop.mp3'")
+    has_food_sound = False
+
 # Load RSU logo
 try:
     rsu_logo = pygame.image.load("rsu_logo.png")
@@ -172,6 +181,9 @@ def start_page():
             display_message("A. 1 Minute", WHITE, WIDTH // 4, HEIGHT // 2 + 100)
             display_message("B. 2 Minutes", WHITE, WIDTH // 4, HEIGHT // 2 + 150)
             display_message("C. 3 Minutes", WHITE, WIDTH // 4, HEIGHT // 2 + 200)
+        
+        # Move quit option to bottom of page
+        display_message("Press Q to Quit Game", RED, WIDTH // 4, HEIGHT - 60)
 
         pygame.display.update()
 
@@ -182,6 +194,11 @@ def start_page():
                 exit()
                 
             if event.type == pygame.KEYDOWN:
+                # Add quit option with 'Q' key
+                if event.key == pygame.K_q:
+                    pygame.quit()
+                    exit()
+                
                 # Add music toggle with 'M' key
                 if event.key == pygame.K_m:
                     global music_playing
@@ -486,6 +503,9 @@ def game_loop(game_mode, game_duration):
             if abs(snake1_pos[0] - food_pos[0]) < SNAKE_SIZE and abs(snake1_pos[1] - food_pos[1]) < SNAKE_SIZE:
                 snake1_score += 1
                 food_spawn = False
+                # Play sound effect when food is eaten
+                if has_food_sound:
+                    food_sound.play()
             else:
                 snake1_body.pop(0)
                 
@@ -507,6 +527,9 @@ def game_loop(game_mode, game_duration):
             if abs(snake2_pos[0] - food_pos[0]) < SNAKE_SIZE and abs(snake2_pos[1] - food_pos[1]) < SNAKE_SIZE:
                 snake2_score += 1
                 food_spawn = False
+                # Play sound effect when food is eaten
+                if has_food_sound:
+                    food_sound.play()
             else:
                 snake2_body.pop(0)
                 
