@@ -1,16 +1,17 @@
 import pygame
 import random
 import time
-import os
-import json
+import heapq
+from collections import deque
 
 # Initialize Pygame
 pygame.init()
+pygame.mixer.init()  # Initialize the mixer module for sound
 
 # Screen dimensions
 WIDTH, HEIGHT = 800, 600
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Double Snake Game")
+pygame.display.set_caption("Python Chaser")  # Updated game title in window caption
 
 # Colors
 WHITE = (255, 255, 255)
@@ -19,6 +20,7 @@ RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 BLUE = (0, 0, 255)
 GRAY = (200, 200, 200)
+YELLOW = (255, 255, 0)
 
 # Clock and font
 clock = pygame.time.Clock()
@@ -32,20 +34,36 @@ FPS = 10  # Increased FPS to make the game faster
 # Game duration (in seconds)
 GAME_DURATION = 60
 
-# High scores file path
-HIGH_SCORES_FILE = os.path.join(os.path.dirname(__file__), "high_scores.json")
-
-# Remove image loading and resizing
-# red_snake_head = pygame.image.load("red_snake.png")
-# red_snake_head = pygame.transform.scale(red_snake_head, (SNAKE_SIZE, SNAKE_SIZE))
-# yellow_snake_head = pygame.image.load("yellow_snake.png")
-# yellow_snake_head = pygame.transform.scale(yellow_snake_head, (SNAKE_SIZE, SNAKE_SIZE))
-
 # Load and resize power-up images
 flash_image = pygame.image.load("flash.png")
 flash_image = pygame.transform.scale(flash_image, (SNAKE_SIZE * 3, SNAKE_SIZE * 3))
 snow_image = pygame.image.load("snow.jpg")  # Add snow power-up image
 snow_image = pygame.transform.scale(snow_image, (SNAKE_SIZE * 2, SNAKE_SIZE * 2))  # Smaller size (2x2 blocks)
+
+# Load and set up background music
+try:
+    pygame.mixer.music.load("game_music.mp3")
+    pygame.mixer.music.set_volume(0.5)  # Set volume to 50%
+    pygame.mixer.music.play(-1)  # -1 means loop indefinitely
+    music_playing = True
+except:
+    print("Warning: Could not load background music file 'game_music.mp3'")
+    music_playing = False
+
+# Load RSU logo
+try:
+    rsu_logo = pygame.image.load("rsu_logo.png")
+    rsu_logo = pygame.transform.scale(rsu_logo, (SNAKE_SIZE * 7, SNAKE_SIZE * 10))  # Size: 10x5 blocks
+    logo_position = (WIDTH - SNAKE_SIZE * 10 - 10, 10)  # Top right with 10px margin
+    has_logo = True
+except:
+    print("Warning: Could not load logo file 'rsu_logo.png'")
+    has_logo = False
+
+def draw_logo():
+    """Draw the RSU logo in the top right corner if available"""
+    if has_logo:
+        screen.blit(rsu_logo, logo_position)
 
 def draw_snake(snake_list, color, direction=None):  # Remove head_image and direction parameters
     for i, block in enumerate(snake_list):
@@ -58,158 +76,102 @@ def display_message(msg, color, x, y):
     text = font.render(msg, True, color)
     screen.blit(text, [x, y])
 
-class InputBox:
-    def __init__(self, x, y, w, h, text=''):
-        self.rect = pygame.Rect(x, y, w, h)
-        self.color = WHITE
-        self.text = text
-        self.active = False
-        self.txt_surface = font.render(text, True, WHITE)
-        self.max_length = 12  # Max name length
-
-    def handle_event(self, event):
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            # If the user clicked on the input_box rect
-            if self.rect.collidepoint(event.pos):
-                # Toggle the active variable
-                self.active = True
+# Bot pathfinding using Dijkstra's algorithm
+def find_path_to_food(snake_head, food_pos, obstacles, grid_width, grid_height):
+    # Convert positions to grid coordinates
+    start = (snake_head[0] // SNAKE_SIZE, snake_head[1] // SNAKE_SIZE)
+    goal = (food_pos[0] // SNAKE_SIZE, food_pos[1] // SNAKE_SIZE)
+    
+    # Create set of obstacles (snake bodies)
+    obstacle_set = set((pos[0] // SNAKE_SIZE, pos[1] // SNAKE_SIZE) for pos in obstacles)
+    
+    # Queue for Dijkstra's algorithm
+    queue = [(0, start, [])]  # (cost, position, path)
+    visited = set()
+    
+    # Possible moves: up, right, down, left
+    directions = [
+        (0, -1),  # up
+        (1, 0),   # right
+        (0, 1),   # down
+        (-1, 0)   # left
+    ]
+    
+    while queue:
+        cost, current, path = heapq.heappop(queue)
+        
+        # Convert to grid coordinates
+        current_x, current_y = current
+        
+        # If we've reached the goal
+        if current == goal:
+            if not path:  # If path is empty, move in any valid direction
+                for dx, dy in directions:
+                    nx, ny = current_x + dx, current_y + dy
+                    if 0 <= nx < grid_width and 0 <= ny < grid_height and (nx, ny) not in obstacle_set:
+                        return (dx * SNAKE_SIZE, dy * SNAKE_SIZE)
             else:
-                self.active = False
-            # Change the current color
-            self.color = RED if self.active else WHITE
-        if event.type == pygame.KEYDOWN:
-            if self.active:
-                if event.key == pygame.K_RETURN:
-                    return True  # Signal that Enter was pressed
-                elif event.key == pygame.K_BACKSPACE:
-                    self.text = self.text[:-1]
-                else:
-                    # Only add character if below max length
-                    if len(self.text) < self.max_length and event.unicode.isprintable():
-                        self.text += event.unicode
-                # Re-render the text
-                self.txt_surface = font.render(self.text, True, WHITE)
-        return False
-
-    def draw(self, screen):
-        # Draw the text
-        screen.blit(self.txt_surface, (self.rect.x+5, self.rect.y+5))
-        # Draw the rect
-        pygame.draw.rect(screen, self.color, self.rect, 2)
-
-def save_high_score(player1_name, player2_name, player1_score, player2_score):
-    # Load existing high scores
-    high_scores = []
-    if os.path.exists(HIGH_SCORES_FILE):
-        try:
-            with open(HIGH_SCORES_FILE, 'r') as file:
-                high_scores = json.load(file)
-        except:
-            high_scores = []
+                # Return the first step in the path
+                first_step = path[0]
+                dx = first_step[0] - start[0]
+                dy = first_step[1] - start[1]
+                return (dx * SNAKE_SIZE, dy * SNAKE_SIZE)
+        
+        # Skip if we've already visited this cell
+        if current in visited:
+            continue
+            
+        visited.add(current)
+        
+        # Check all adjacent cells
+        for dx, dy in directions:
+            nx, ny = current_x + dx, current_y + dy
+            
+            # Check if the new position is valid
+            if 0 <= nx < grid_width and 0 <= ny < grid_height and (nx, ny) not in obstacle_set and (nx, ny) not in visited:
+                # Calculate Manhattan distance to the goal as a heuristic
+                h = abs(nx - goal[0]) + abs(ny - goal[1])
+                new_cost = cost + 1 + h  # Cost so far + 1 step + heuristic
+                
+                # Add new position to the queue
+                new_path = path + [(nx, ny)]
+                heapq.heappush(queue, (new_cost, (nx, ny), new_path))
     
-    # Add new scores
-    high_scores.append({"name": player1_name, "score": player1_score})
-    high_scores.append({"name": player2_name, "score": player2_score})
-    
-    # Sort by score (highest first)
-    high_scores.sort(key=lambda x: x["score"], reverse=True)
-    
-    # Keep only top 10 scores
-    high_scores = high_scores[:10]
-    
-    # Save to file
-    with open(HIGH_SCORES_FILE, 'w') as file:
-        json.dump(high_scores, file)
-    
-    return high_scores
-
-def display_high_scores(screen):
-    high_scores = []
-    if os.path.exists(HIGH_SCORES_FILE):
-        try:
-            with open(HIGH_SCORES_FILE, 'r') as file:
-                high_scores = json.load(file)
-        except:
-            high_scores = []
-    
-    screen.fill(BLACK)
-    display_message("HIGH SCORES", WHITE, WIDTH // 3, 50)
-    
-    y_pos = 120
-    for i, score in enumerate(high_scores[:10], 1):
-        player_name = score["name"] if "name" in score else "Unknown"
-        player_score = score["score"]
-        display_message(f"{i}. {player_name}: {player_score}", WHITE, WIDTH // 3, y_pos)
-        y_pos += 40
-    
-    display_message("Press any key to quit", WHITE, WIDTH // 3, HEIGHT - 50)
-    pygame.display.update()
-    
-    # Wait for key press
-    waiting = True
-    while waiting:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                waiting = False
-            elif event.type == pygame.KEYDOWN:
-                waiting = False
+    # If no path found, move in a random valid direction
+    random.shuffle(directions)
+    for dx, dy in directions:
+        nx, ny = start[0] + dx, start[1] + dy
+        if 0 <= nx < grid_width and 0 <= ny < grid_height and (nx, ny) not in obstacle_set:
+            return (dx * SNAKE_SIZE, dy * SNAKE_SIZE)
+            
+    # If completely stuck, just try to go up
+    return (0, -SNAKE_SIZE)
 
 def start_page():
     selected_timer = 60  # Default timer (1 minute)
+    game_mode = None  # "PVP" or "PVE"
     running = True
     
-    # Create input boxes for player names
-    player1_input = InputBox(WIDTH // 4 + 200, HEIGHT // 4 + 40, 200, 32, "Player 1")
-    player2_input = InputBox(WIDTH // 4 + 200, HEIGHT // 4 + 80, 200, 32, "Player 2")
-    player1_name = "Player 1"
-    player2_name = "Player 2"
-    
-    # Input box state
-    current_step = "names"  # "names" or "timer"
-    player1_confirmed = False
-    player2_confirmed = False
-    
-    # Make player1 input active by default
-    player1_input.active = True
-    player1_input.color = RED
-
     while running:
         screen.fill(BLACK)
 
-        # Display welcome message
-        display_message("Welcome to Snake Race!!!", WHITE, WIDTH // 4, HEIGHT // 6)
+        # Display welcome message with new game name
+        display_message("Welcome to Python Chaser!!!", WHITE, WIDTH // 4, HEIGHT // 6)
 
-        if current_step == "names":
-            # Display name input fields
-            display_message("Enter Player Names:", WHITE, WIDTH // 4, HEIGHT // 4)
-            display_message("Player 1 (Red):", RED, WIDTH // 4, HEIGHT // 4 + 40)
-            display_message("Player 2 (Blue):", BLUE, WIDTH // 4, HEIGHT // 4 + 80)
-            
-            # Draw input boxes
-            player1_input.draw(screen)
-            player2_input.draw(screen)
-            
-            # Display continue instruction and status
-            display_message("Click on name box to edit, press Tab to switch", WHITE, WIDTH // 4, HEIGHT // 2)
-            display_message("Press Enter when done with both names", WHITE, WIDTH // 4, HEIGHT // 2 + 40)
-            
-            # Show which names are confirmed
-            if player1_confirmed:
-                display_message("✓", GREEN, WIDTH // 4 + 180, HEIGHT // 4 + 40)
-            if player2_confirmed:
-                display_message("✓", GREEN, WIDTH // 4 + 180, HEIGHT // 4 + 80)
-        else:
-            # Display rules
-            display_message("Rules:", WHITE, WIDTH // 4, HEIGHT // 4)
-            display_message(f"{player1_name} (Red): Use W/A/S/D to move", RED, WIDTH // 4, HEIGHT // 4 + 40)
-            display_message(f"{player2_name} (Blue): Use Arrow Keys to move", BLUE, WIDTH // 4, HEIGHT // 4 + 80)
-            display_message("Eat the green food to score points!", GREEN, WIDTH // 4, HEIGHT // 4 + 120)
+        # Display RSU logo
+        draw_logo()
 
-            # Display timer selection
-            display_message("Select Timer:", WHITE, WIDTH // 4, HEIGHT // 2)
-            display_message("1. 1 Minute", WHITE, WIDTH // 4, HEIGHT // 2 + 40)
-            display_message("2. 2 Minutes", WHITE, WIDTH // 4, HEIGHT // 2 + 80)
-            display_message("3. 3 Minutes", WHITE, WIDTH // 4, HEIGHT // 2 + 120)
+        # Display mode selection
+        display_message("Select Game Mode:", WHITE, WIDTH // 4, HEIGHT // 3)
+        display_message("1. Player vs Bot", WHITE, WIDTH // 4, HEIGHT // 3 + 50)
+        display_message("2. Player vs Player", WHITE, WIDTH // 4, HEIGHT // 3 + 100)
+        
+        # Display timer selection (only shown after game mode is selected)
+        if game_mode:
+            display_message("Select Timer:", WHITE, WIDTH // 4, HEIGHT // 2 + 50)
+            display_message("A. 1 Minute", WHITE, WIDTH // 4, HEIGHT // 2 + 100)
+            display_message("B. 2 Minutes", WHITE, WIDTH // 4, HEIGHT // 2 + 150)
+            display_message("C. 3 Minutes", WHITE, WIDTH // 4, HEIGHT // 2 + 200)
 
         pygame.display.update()
 
@@ -219,70 +181,165 @@ def start_page():
                 pygame.quit()
                 exit()
                 
-            if current_step == "names":
-                # Handle Tab key to switch between input boxes
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_TAB:
-                    if player1_input.active:
-                        player1_input.active = False
-                        player2_input.active = True
-                        player1_input.color = WHITE
-                        player2_input.color = RED
+            if event.type == pygame.KEYDOWN:
+                # Add music toggle with 'M' key
+                if event.key == pygame.K_m:
+                    global music_playing
+                    if music_playing:
+                        pygame.mixer.music.pause()
+                        music_playing = False
                     else:
-                        player1_input.active = True
-                        player2_input.active = False
-                        player1_input.color = RED
-                        player2_input.color = WHITE
+                        pygame.mixer.music.unpause()
+                        music_playing = True
                 
-                # Handle Enter key to confirm names and move to next screen
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
-                    if player1_input.active:
-                        player1_name = player1_input.text if player1_input.text else "Player 1"
-                        player1_confirmed = True
-                        # Switch to player 2 input if not confirmed yet
-                        if not player2_confirmed:
-                            player1_input.active = False
-                            player2_input.active = True
-                            player1_input.color = WHITE
-                            player2_input.color = RED
-                    elif player2_input.active:
-                        player2_name = player2_input.text if player2_input.text else "Player 2"
-                        player2_confirmed = True
-                        # Switch to player 1 input if not confirmed yet
-                        if not player1_confirmed:
-                            player1_input.active = True
-                            player2_input.active = False
-                            player1_input.color = RED
-                            player2_input.color = WHITE
-                    
-                    # If both names are confirmed, move to timer selection
-                    if player1_confirmed and player2_confirmed:
-                        current_step = "timer"
-                
-                # Handle input box events (clicks, typing)
-                player1_clicked = player1_input.handle_event(event)
-                player2_clicked = player2_input.handle_event(event)
-                
-                # If Space key pressed, use default names and move to timer
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-                    current_step = "timer"
-            else:
-                if event.type == pygame.KEYDOWN:
+                if not game_mode:
+                    # Game mode selection
                     if event.key == pygame.K_1:
+                        game_mode = "PVE"  # Player vs Bot
+                    elif event.key == pygame.K_2:
+                        game_mode = "PVP"  # Player vs Player
+                else:
+                    # Timer selection
+                    if event.key == pygame.K_a:
                         selected_timer = 60  # 1 minute
                         running = False
-                    elif event.key == pygame.K_2:
+                    elif event.key == pygame.K_b:
                         selected_timer = 120  # 2 minutes
                         running = False
-                    elif event.key == pygame.K_3:
+                    elif event.key == pygame.K_c:
                         selected_timer = 180  # 3 minutes
                         running = False
 
-    # Return both timer and player names
-    return selected_timer, player1_name, player2_name
+    # Return timer and game mode
+    return selected_timer, game_mode
 
-def main():
-    global GAME_DURATION  # Declare GAME_DURATION as global
-    GAME_DURATION, player1_name, player2_name = start_page()  # Get selected timer and player names
+def display_end_screen(snake1_score, snake2_score, is_bot_game):
+    """Display the end game screen with scores and wait for space to return to menu"""
+    screen.fill(BLACK)
+    
+    # Display RSU logo
+    draw_logo()
+    
+    player1_name = "Player 1"
+    player2_name = "Bot" if is_bot_game else "Player 2"
+    
+    # Determine winner
+    if snake1_score > snake2_score:
+        display_message(f"{player1_name} Wins!", RED, WIDTH // 3, HEIGHT // 3)
+    elif snake2_score > snake1_score:
+        display_message(f"{player2_name} Wins!", BLUE if not is_bot_game else YELLOW, WIDTH // 3, HEIGHT // 3)
+    else:
+        display_message("It's a Tie!", WHITE, WIDTH // 3, HEIGHT // 3)
+    
+    # Sort scores to display in order
+    players = [(player1_name, snake1_score, RED), (player2_name, snake2_score, BLUE if not is_bot_game else YELLOW)]
+    players.sort(key=lambda x: x[1], reverse=True)
+    
+    # Display scores in order
+    y_pos = HEIGHT // 2
+    for i, (name, score, color) in enumerate(players, 1):
+        display_message(f"{i}. {name}: {score}", color, WIDTH // 3, y_pos)
+        y_pos += 40
+    
+    # Prompt to return to menu
+    display_message("Press SPACE to return to main menu", WHITE, WIDTH // 4, HEIGHT - 100)
+    # Add note about music toggle
+    display_message("Press M to toggle music", WHITE, WIDTH // 4, HEIGHT - 60)
+    pygame.display.update()
+    
+    # Wait for space key
+    waiting = True
+    while waiting:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    waiting = False
+                    return True  # Return to main menu
+    
+    return False  # Should not reach here
+
+def show_preparation_screen(is_bot_game):
+    """Display controls and game information for 10 seconds before game starts"""
+    screen.fill(BLACK)
+    
+    # Display RSU logo
+    draw_logo()
+    
+    # Title
+    display_message("Get Ready!", WHITE, WIDTH // 3, 60)
+    
+    # Controls section
+    display_message("Controls:", WHITE, 100, 120)
+    display_message("Player 1 (Red):", RED, 100, 160)
+    display_message("W - Up", WHITE, 120, 190)
+    display_message("A - Left", WHITE, 120, 220)
+    display_message("S - Down", WHITE, 120, 250)
+    display_message("D - Right", WHITE, 120, 280)
+    
+    if not is_bot_game:
+        display_message("Player 2 (Blue):", BLUE, 400, 160)
+        display_message("↑ - Up", WHITE, 420, 190)
+        display_message("← - Left", WHITE, 420, 220)
+        display_message("↓ - Down", WHITE, 420, 250)
+        display_message("→ - Right", WHITE, 420, 280)
+    else:
+        display_message("Bot (Yellow):", YELLOW, 400, 160)
+        display_message("Automated AI using", WHITE, 420, 220)
+        display_message("pathfinding algorithm", WHITE, 420, 250)
+    
+    # Power-ups section
+    display_message("Power-ups:", WHITE, 100, 340)
+    # Draw power-up examples
+    screen.blit(pygame.transform.scale(flash_image, (30, 30)), (120, 380))
+    display_message("Speed boost (30% faster for 5s)", WHITE, 170, 380)
+    
+    screen.blit(pygame.transform.scale(snow_image, (30, 30)), (120, 420))
+    display_message("Freeze opponent (for 3s)", WHITE, 170, 420)
+    
+    # Add music control information
+    display_message("Press M to toggle music on/off", WHITE, WIDTH // 4, HEIGHT - 120)
+    
+    # Countdown
+    start_time = time.time()
+    countdown_duration = 10  # 10 seconds preparation time
+    
+    while time.time() - start_time < countdown_duration:
+        # Redraw the logo (it might be covered by countdown updates)
+        draw_logo()
+        
+        # Calculate remaining time
+        remaining = countdown_duration - int(time.time() - start_time)
+        
+        # Clear the previous countdown text area
+        pygame.draw.rect(screen, BLACK, [WIDTH // 2 - 50, HEIGHT - 100, 100, 50])
+        
+        # Display countdown
+        display_message(f"Starting in: {remaining}s", WHITE, WIDTH // 3, HEIGHT - 80)
+        
+        # Update display
+        pygame.display.update()
+        
+        # Check if user wants to skip countdown
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE:
+                    return  # Skip countdown if space is pressed
+        
+        # Control frame rate
+        clock.tick(30)
+
+def game_loop(game_mode, game_duration):
+    """Main game loop separated as a function to allow restarting"""
+    is_bot_game = (game_mode == "PVE")
+    
+    # Show preparation screen
+    show_preparation_screen(is_bot_game)
 
     # Player 1 (Red Snake)
     snake1_pos = [100, 50]
@@ -296,7 +353,7 @@ def main():
     snake1_frozen = False
     snake1_frozen_start_time = None
 
-    # Player 2 (Blue Snake)
+    # Player 2 (Blue Snake) / Bot
     snake2_pos = [700, 550]
     snake2_body = [[700, 550], [720, 550]]  # Start with 2 blocks
     snake2_direction = 'LEFT'
@@ -307,6 +364,8 @@ def main():
     snake2_last_move_time = 0  # Last time snake 2 moved
     snake2_frozen = False
     snake2_frozen_start_time = None
+    bot_decision_time = 0  # Time tracker for bot decisions
+    bot_decision_interval = 0.1  # How often the bot makes decisions (in seconds)
 
     # Food
     food_pos = [random.randrange(1, (WIDTH // SNAKE_SIZE)) * SNAKE_SIZE,
@@ -337,8 +396,19 @@ def main():
         # Event handling
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                running = False
+                pygame.quit()
+                exit()
             if event.type == pygame.KEYDOWN:
+                # Music toggle
+                if event.key == pygame.K_m:
+                    global music_playing
+                    if music_playing:
+                        pygame.mixer.music.pause()
+                        music_playing = False
+                    else:
+                        pygame.mixer.music.unpause()
+                        music_playing = True
+                
                 # Player 1 controls (WASD)
                 if event.key == pygame.K_w and snake1_direction != 'DOWN':
                     snake1_direction = 'UP'
@@ -353,19 +423,44 @@ def main():
                     snake1_direction = 'RIGHT'
                     snake1_change = [SNAKE_SIZE, 0]
 
-                # Player 2 controls (Arrow keys)
-                if event.key == pygame.K_UP and snake2_direction != 'DOWN':
-                    snake2_direction = 'UP'
-                    snake2_change = [0, -SNAKE_SIZE]
-                elif event.key == pygame.K_DOWN and snake2_direction != 'UP':
-                    snake2_direction = 'DOWN'
-                    snake2_change = [0, SNAKE_SIZE]
-                elif event.key == pygame.K_LEFT and snake2_direction != 'RIGHT':
-                    snake2_direction = 'LEFT'
-                    snake2_change = [-SNAKE_SIZE, 0]
-                elif event.key == pygame.K_RIGHT and snake2_direction != 'LEFT':
-                    snake2_direction = 'RIGHT'
-                    snake2_change = [SNAKE_SIZE, 0]
+                # Player 2 controls (Arrow keys) - Only if not a bot game
+                if not is_bot_game:
+                    if event.key == pygame.K_UP and snake2_direction != 'DOWN':
+                        snake2_direction = 'UP'
+                        snake2_change = [0, -SNAKE_SIZE]
+                    elif event.key == pygame.K_DOWN and snake2_direction != 'UP':
+                        snake2_direction = 'DOWN'
+                        snake2_change = [0, SNAKE_SIZE]
+                    elif event.key == pygame.K_LEFT and snake2_direction != 'RIGHT':
+                        snake2_direction = 'LEFT'
+                        snake2_change = [-SNAKE_SIZE, 0]
+                    elif event.key == pygame.K_RIGHT and snake2_direction != 'LEFT':
+                        snake2_direction = 'RIGHT'
+                        snake2_change = [SNAKE_SIZE, 0]
+
+        # Bot decision making (if in PVE mode)
+        if is_bot_game and not snake2_frozen and current_time - bot_decision_time > bot_decision_interval:
+            # Collect obstacles (both snake bodies minus the tail that will move)
+            obstacles = snake1_body[:-1] + snake2_body[:-1]
+            
+            # Find path to food
+            bot_change = find_path_to_food(snake2_pos, food_pos, obstacles, WIDTH // SNAKE_SIZE, HEIGHT // SNAKE_SIZE)
+            
+            # Update direction based on the next move
+            if bot_change == (0, -SNAKE_SIZE) and snake2_direction != 'DOWN':
+                snake2_direction = 'UP'
+                snake2_change = [0, -SNAKE_SIZE]
+            elif bot_change == (0, SNAKE_SIZE) and snake2_direction != 'UP':
+                snake2_direction = 'DOWN'
+                snake2_change = [0, SNAKE_SIZE]
+            elif bot_change == (-SNAKE_SIZE, 0) and snake2_direction != 'RIGHT':
+                snake2_direction = 'LEFT'
+                snake2_change = [-SNAKE_SIZE, 0]
+            elif bot_change == (SNAKE_SIZE, 0) and snake2_direction != 'LEFT':
+                snake2_direction = 'RIGHT'
+                snake2_change = [SNAKE_SIZE, 0]
+                
+            bot_decision_time = current_time
 
         # Check if either snake is frozen and update frozen status
         if snake1_frozen and current_time - snake1_frozen_start_time > 3:
@@ -491,9 +586,12 @@ def main():
 
         # Draw snakes with original rectangle-based heads
         draw_snake(snake1_body, RED)
-        draw_snake(snake2_body, BLUE)
+        draw_snake(snake2_body, BLUE if not is_bot_game else YELLOW)  # Make bot yellow to distinguish
 
         # Display scores and status effects
+        player1_name = "Player 1"
+        player2_name = "Player 2" if not is_bot_game else "Bot"
+        
         display_message(f"{player1_name}: {snake1_score}", WHITE, 10, 10)
         if snake1_frozen:
             display_message("FROZEN!", WHITE, 10, 70)
@@ -506,7 +604,7 @@ def main():
         display_message(f"Time Left: {remaining_time}s", WHITE, WIDTH - 200, 10)
 
         # Check game duration
-        if elapsed_time >= GAME_DURATION:
+        if current_time - start_time >= game_duration:
             running = False
 
         pygame.display.update()
@@ -514,22 +612,28 @@ def main():
         # Fixed frame rate for rendering only
         clock.tick(60)
 
-    # Game over screen
-    screen.fill(BLACK)
-    if snake1_score > snake2_score:
-        display_message(f"{player1_name} Wins!", RED, WIDTH // 3, HEIGHT // 3)
-    elif snake2_score > snake1_score:
-        display_message(f"{player2_name} Wins!", BLUE, WIDTH // 3, HEIGHT // 3)
-    else:
-        display_message("It's a Tie!", WHITE, WIDTH // 3, HEIGHT // 3)
-    display_message(f"Final Scores - {player1_name}: {snake1_score}, {player2_name}: {snake2_score}", WHITE, WIDTH // 6, HEIGHT // 2)
-    pygame.display.update()
-    time.sleep(5)
-    
-    # Save high scores and display them
-    high_scores = save_high_score(player1_name, player2_name, snake1_score, snake2_score)
-    display_high_scores(screen)
+    # Return final scores
+    return snake1_score, snake2_score, is_bot_game
 
+def main():
+    """Main function with game loop that can restart"""
+    running = True
+    
+    while running:
+        # Get game settings from start page
+        game_duration, game_mode = start_page()
+        
+        # Run the game and get scores
+        snake1_score, snake2_score, is_bot_game = game_loop(game_mode, game_duration)
+        
+        # Show end screen and check if we should return to menu
+        continue_playing = display_end_screen(snake1_score, snake2_score, is_bot_game)
+        
+        if not continue_playing:
+            running = False
+
+    # Stop music when exiting
+    pygame.mixer.music.stop()
     pygame.quit()
 
 if __name__ == "__main__":
